@@ -113,7 +113,7 @@ python -m venv .venv
 Invoke-WebRequest https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip -OutFile datasets\scifact.zip
 Expand-Archive datasets\scifact.zip -DestinationPath datasets
 
-.venv\Scripts\python.exe -m pytest                       # 99 tests, no model downloads needed
+.venv\Scripts\python.exe -m pytest                       # 171 tests, no model downloads or API key needed
 .venv\Scripts\python.exe -m searchlab.demo "your query"  # BM25 vs dense side by side
 ```
 
@@ -138,7 +138,8 @@ Dashboard (two terminals):
 
 The dashboard shows BM25, dense, hybrid and hybrid + reranker side by side with scores and latency, and lets
 you change top-K, BM25 `k1`/`b`, HNSW `efSearch`, exact vs HNSW, fusion method, RRF `k`, weights, alpha, and
-reranking on/off. Its second tab shows the experiment tables and the recall-vs-latency graph. The API is
+reranking on/off. The "Ask (RAG)" tab answers a question with numbered citations and flags unsupported sentences
+(needs the LLM `.env` described below). The last tab shows the experiment tables and the recall-vs-latency graph. The API is
 configurable with `SEARCHLAB_DATASET` (default `datasets/scifact`); the dashboard with `SEARCHLAB_API_URL`.
 
 ## Code map
@@ -154,6 +155,10 @@ configurable with `SEARCHLAB_DATASET` (default `datasets/scifact`); the dashboar
 | Cross-encoder reranker | `retrieval/reranker.py` |
 | Metrics (Recall, Precision, MRR, nDCG, Hit Rate) and dataset loader | `evaluation/metrics.py`, `evaluation/dataset.py` |
 | Engine, API, dashboard | `engine.py`, `api.py`, `dashboard.py` |
+| Chunking strategies and experiment (Phase 7) | `chunkers.py`, `chunking_benchmark.py` |
+| LLM client, query transformations, experiment, harm analysis (Phases 6, 10) | `llm.py`, `query_transform.py`, `query_benchmark.py`, `rewrite_analysis.py` |
+| RAG answers with citations and grounding check (Phase 8) | `rag.py` |
+| Multi-dataset benchmark and failure analysis (Phase 9) | `multi_benchmark.py` |
 
 ## Status
 
@@ -164,11 +169,36 @@ configurable with `SEARCHLAB_DATASET` (default `datasets/scifact`); the dashboar
 | 3. Hybrid search (RRF, weighted RRF, score fusion) | done |
 | 4. Cross-encoder reranking | done (measured on a 40-query sample) |
 | 5. FastAPI + Streamlit dashboard | done |
-| 6. Query rewriting, HyDE, expansion | not started (needs an LLM) |
-| 7. Chunking experiments | not started |
-| 8. RAG answer layer | not started (needs an LLM) |
-| 9. Multi-dataset benchmarking and failure analysis | not started |
-| 10. Research extension: when does query rewriting hurt? | not started (needs an LLM) |
+| 6. Query rewriting, HyDE, expansion | code and tests done; experiment not run yet (needs an LLM key) |
+| 7. Chunking experiments | code and tests done; experiment partly run (see below) |
+| 8. RAG answer layer | done and tested with a stub LLM (`/answer` endpoint, Ask tab); not yet tried with a real LLM |
+| 9. Multi-dataset benchmarking and failure analysis | code and tests done; experiment not run yet |
+| 10. Research extension: when does query rewriting hurt? | code and tests done; needs the Phase 6 results first |
+
+No results are reported for phases 6 to 10 because none have been measured yet.
+
+### Finishing phases 6 to 10
+
+```powershell
+# 1. Phase 7 (about 45 minutes of CPU). The `fixed` strategy is already embedded and cached.
+.venv\Scripts\python.exe -m searchlab.chunking_benchmark
+
+# 2. Phase 9: SciFact + NFCorpus. Run it alone, since it measures latency (NFCorpus is already downloaded).
+.venv\Scripts\python.exe -m searchlab.multi_benchmark
+
+# 3. Phases 6, 8, 10 need an LLM. Create a git-ignored .env file in the project root:
+#      LLM_API_KEY=...
+#      LLM_BASE_URL=https://api.groq.com/openai/v1
+#      LLM_MODEL=llama-3.3-70b-versatile
+.venv\Scripts\python.exe -m searchlab.query_benchmark --max-queries 100   # Phase 6 (every LLM reply is cached)
+.venv\Scripts\python.exe -m searchlab.rewrite_analysis                    # Phase 10
+```
+
+The LLM client works with any OpenAI-compatible endpoint, and free tiers are rate-limited, so the Phase 6 run is
+sampled (100 queries, about 300 LLM calls, roughly 15 minutes at free-tier limits). For a real-world demo dataset
+(for example government schemes), put it in BEIR format (`corpus.jsonl`, `queries.jsonl`, `qrels/test.tsv`) under
+`datasets/<name>` and pass `--datasets <name>` to the multi-dataset benchmark. It needs real documents and relevance
+labels, which this repo does not contain.
 
 ## Known limitations
 
