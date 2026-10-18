@@ -11,13 +11,13 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from searchlab.engine import SearchEngine, SearchParams
+from searchlab.llm import LLMClient, LLMError
 from searchlab.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
-class CompareRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=500)
+class RetrievalSettings(BaseModel):
     top_k: int = Field(5, ge=1, le=20)
     bm25_k1: float = Field(1.5, ge=0, le=5)
     bm25_b: float = Field(0.75, ge=0, le=1)
@@ -32,16 +32,30 @@ class CompareRequest(BaseModel):
     rerank_pool: int = Field(20, ge=1, le=100)
 
     def to_params(self) -> SearchParams:
-        data = self.model_dump(exclude={"query"})
-        return SearchParams(**data)
+        wanted = SearchParams.__dataclass_fields__.keys()
+        return SearchParams(**{k: v for k, v in self.model_dump().items() if k in wanted})
 
 
-def create_app(engine: SearchEngine | None = None) -> FastAPI:
-    """Build the app. Pass an engine (tests) or let it load the dataset at startup."""
+class CompareRequest(RetrievalSettings):
+    query: str = Field(min_length=1, max_length=500)
+
+
+class AnswerRequest(RetrievalSettings):
+    question: str = Field(min_length=1, max_length=500)
+    token_budget: int = Field(1500, ge=200, le=6000)
+
+
+def create_app(engine: SearchEngine | None = None, llm=None) -> FastAPI:
+    """Build the app. Pass an engine (tests) or let it load the dataset at startup.
+
+    `llm` (anything with a `complete(system, user, ...)` method) powers /answer; when omitted it
+    is created from the environment on first use.
+    """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         setup_logging("INFO")
+        app.state.llm = llm
         if engine is not None:
             app.state.engine = engine
         else:
@@ -75,6 +89,28 @@ def create_app(engine: SearchEngine | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="weights must not both be zero")
         panels = get_engine(request).compare(body.query, body.to_params())
         return {"query": body.query, "panels": [asdict(p) for p in panels]}
+
+    def get_llm(request: Request):
+        if request.app.state.llm is None:
+            try:
+                request.app.state.llm = LLMClient.from_env()
+            except LLMError as exc:
+                raise HTTPException(status_code=503, detail=f"LLM not configured: {exc}")
+        return request.app.state.llm
+
+    @app.post("/answer")
+    def answer(body: AnswerRequest, request: Request):
+        """Grounded answer: hybrid retrieval, then an LLM answer with citations and a grounding check."""
+        if not body.question.strip():
+            raise HTTPException(status_code=422, detail="question must not be blank")
+        if body.fusion_method == "weighted_rrf" and body.bm25_weight + body.dense_weight == 0:
+            raise HTTPException(status_code=422, detail="weights must not both be zero")
+        llm_client = get_llm(request)
+        try:
+            result = get_engine(request).answer(body.question, llm_client, body.to_params(), body.token_budget)
+        except LLMError as exc:
+            raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}")
+        return asdict(result)
 
     return app
 

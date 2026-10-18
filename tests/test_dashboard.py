@@ -93,3 +93,58 @@ def test_api_validation_error_is_shown(monkeypatch):
     monkeypatch.setattr(requests, "post", lambda url, json, timeout: FakeResponse(422, {"detail": "bad"}))
     at = submit(run_app())
     assert any("422" in e.value for e in at.error)
+
+
+ANSWER = {
+    "question": "q",
+    "answer": "Statins lower risk [1].",
+    "sources": [{"n": 1, "doc_id": "d1", "title": "Statins", "passage": "Statins lower risk.", "score": 0.9}],
+    "context_tokens": 120,
+    "token_budget": 1500,
+    "cited": [1],
+    "invalid_citations": [],
+    "unsupported_sentences": [],
+    "grounded_ratio": 1.0,
+    "abstained": False,
+}
+
+
+def ask(at):
+    next(b for b in at.button if b.label == "Answer").click().run()
+    return at
+
+
+def test_ask_tab_shows_answer_grounding_and_sources(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json, timeout):
+        sent["url"] = url
+        sent.update(json)
+        return FakeResponse(200, ANSWER)
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    at = ask(run_app())
+
+    assert not at.exception
+    assert sent["url"].endswith("/answer")
+    assert sent["token_budget"] == 1500 and "question" in sent
+    assert any("Statins lower risk [1]." in m.value for m in at.markdown)
+    labels = [m.label for m in at.metric]
+    assert labels == ["Grounded sentences", "Context used", "Sources"]
+    assert at.metric[0].value == "100%"
+
+
+def test_ask_tab_warns_about_unsupported_sentences(monkeypatch):
+    bad = dict(ANSWER, unsupported_sentences=["Made up claim."], invalid_citations=[7], grounded_ratio=0.5)
+    monkeypatch.setattr(requests, "post", lambda url, json, timeout: FakeResponse(200, bad))
+    at = ask(run_app())
+    assert any("Made up claim." in w.value for w in at.warning)
+    assert any("[7]" in e.value for e in at.error)
+
+
+def test_ask_tab_shows_llm_not_configured_error(monkeypatch):
+    monkeypatch.setattr(
+        requests, "post", lambda url, json, timeout: FakeResponse(503, {"detail": "LLM not configured"})
+    )
+    at = ask(run_app())
+    assert any("503" in e.value for e in at.error)

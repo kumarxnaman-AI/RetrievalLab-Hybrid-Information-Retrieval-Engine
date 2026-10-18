@@ -9,6 +9,7 @@ from searchlab.config import Config
 from searchlab.evaluation.dataset import load_beir_dataset
 from searchlab.models import Document, SearchResult
 from searchlab.pipeline import build_hnsw, build_systems
+from searchlab.rag import RAGPipeline
 from searchlab.retrieval.aggregate import aggregate_to_documents
 from searchlab.retrieval.bm25 import BM25Retriever
 from searchlab.retrieval.hybrid import HybridParams, HybridRetriever
@@ -53,7 +54,9 @@ class SearchEngine:
         hnsw,
         reranker: CrossEncoderReranker,
         n_chunks: int,
+        chunk_texts: dict[str, str] | None = None,
     ) -> None:
+        self.chunk_texts = chunk_texts or {}
         self.docs = {d.doc_id: d for d in docs}
         self.bm25 = bm25
         self.dense = dense
@@ -81,7 +84,13 @@ class SearchEngine:
             systems.dense, config, M=M, ef_construction=ef_construction, cache_dir=cache_dir
         )
         return cls(
-            docs, systems.bm25, systems.dense, hnsw, reranker or CrossEncoderReranker(), len(systems.chunks)
+            docs,
+            systems.bm25,
+            systems.dense,
+            hnsw,
+            reranker or CrossEncoderReranker(),
+            len(systems.chunks),
+            chunk_texts={c.chunk_id: c.text for c in systems.chunks},
         )
 
     @classmethod
@@ -172,6 +181,29 @@ class SearchEngine:
                 self._panel(f"Hybrid + reranker (top {pool})", "reranker score", hybrid_ms + rerank_ms, reranked, p.top_k)
             )
         return panels
+
+    def retrieve(self, query: str, params: SearchParams | None = None) -> list[SearchResult]:
+        """Final ranked documents: hybrid search, then the reranker if enabled."""
+        p = params or SearchParams()
+        bm25 = BM25Retriever(self.bm25.index, k1=p.bm25_k1, b=p.bm25_b)
+        hybrid = HybridRetriever(bm25, self._dense_search(p), self.dense.encode)
+        pool = max(p.top_k, p.rerank_pool) if p.rerank else p.top_k
+        fused = hybrid.search(query, pool, self._hybrid_params(p))
+        if p.rerank:
+            return self.reranker.rerank(query, fused[:pool], self.doc_texts, p.top_k)
+        return fused[: p.top_k]
+
+    def passage_of(self, result: SearchResult) -> tuple[str, str]:
+        """(title, passage) used as RAG context: the document's best-matching chunk."""
+        title = self.docs[result.doc_id].metadata.get("title") or result.doc_id
+        passage = self.chunk_texts.get(result.chunk_id) or self.doc_texts[result.doc_id]
+        return title, passage
+
+    def answer(self, question: str, llm, params: SearchParams | None = None, token_budget: int = 1500):
+        """Retrieval-augmented answer with citations and a grounding check."""
+        p = params or SearchParams()
+        pipeline = RAGPipeline(lambda q: self.retrieve(q, p), self.passage_of, llm, token_budget)
+        return pipeline.answer(question)
 
     def warm_up(self) -> None:
         """Load both models now, so the first real query doesn't pay the one-time cost."""

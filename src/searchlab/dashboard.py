@@ -68,9 +68,9 @@ def sidebar_controls() -> dict:
     }
 
 
-def call_api(query: str, settings: dict):
+def post_api(path: str, payload: dict):
     try:
-        response = requests.post(f"{API_URL}/compare", json={"query": query, **settings}, timeout=300)
+        response = requests.post(f"{API_URL}{path}", json=payload, timeout=300)
     except requests.exceptions.ConnectionError:
         st.error(
             f"Cannot reach the API at {API_URL}. Start it with: "
@@ -81,6 +81,10 @@ def call_api(query: str, settings: dict):
         st.error(f"API error {response.status_code}: {response.text}")
         return None
     return response.json()
+
+
+def call_api(query: str, settings: dict):
+    return post_api("/compare", {"query": query, **settings})
 
 
 def render_panel(panel: dict) -> None:
@@ -128,6 +132,49 @@ def render_search_tab(settings: dict) -> None:
     st.caption(f"{len(shared)} of the top {settings['top_k']} documents are shared by {names[0]} and {names[1]}.")
 
 
+def render_answer_tab(settings: dict) -> None:
+    st.write(
+        "Ask a question. The system retrieves with the hybrid settings in the sidebar, gives the LLM "
+        "numbered sources, and checks that every answer sentence is cited and supported."
+    )
+    with st.form("ask"):
+        question = st.text_input("Question", value=EXAMPLES[0], key="question")
+        budget = st.slider("Context token budget", 200, 4000, 1500, 100)
+        submitted = st.form_submit_button("Answer", type="primary")
+    if not submitted:
+        return
+    if not question.strip():
+        st.warning("Please enter a question.")
+        return
+
+    with st.spinner("Retrieving and generating..."):
+        data = post_api("/answer", {"question": question, **settings, "token_budget": budget})
+    if data is None:
+        return
+
+    if data["abstained"]:
+        st.warning("The model said it cannot answer from the retrieved sources.")
+    st.markdown("### Answer")
+    st.write(data["answer"])
+
+    ratio = data["grounded_ratio"]
+    cols = st.columns(3)
+    cols[0].metric("Grounded sentences", "n/a" if ratio is None else f"{ratio:.0%}")
+    cols[1].metric("Context used", f"{data['context_tokens']} / {data['token_budget']} tokens")
+    cols[2].metric("Sources", len(data["sources"]))
+    if data["invalid_citations"]:
+        st.error(f"The answer cites sources that do not exist: {data['invalid_citations']}")
+    for sentence in data["unsupported_sentences"]:
+        st.warning(f"Not supported by its citations: {sentence}")
+
+    st.markdown("### Sources")
+    for source in data["sources"]:
+        cited = source["n"] in data["cited"]
+        with st.expander(f"[{source['n']}] {source['title']}" + ("  (cited)" if cited else ""), expanded=cited):
+            st.caption(f"doc {source['doc_id']}  ·  retrieval score {source['score']:.3f}")
+            st.write(source["passage"])
+
+
 def render_results_tab() -> None:
     st.write("Results from the benchmark scripts in `results/` (all on BEIR SciFact).")
     sections = [
@@ -135,6 +182,10 @@ def render_results_tab() -> None:
         ("Phase 2: HNSW vs exact KNN", "hnsw_benchmark.md"),
         ("Phase 3: hybrid retrieval and fusion", "hybrid_benchmark.md"),
         ("Phase 4: cross-encoder reranking", "rerank_benchmark.md"),
+        ("Phase 6: query rewriting, HyDE, expansion", "query_transform_benchmark.md"),
+        ("Phase 7: chunking strategies", "chunking_benchmark.md"),
+        ("Phase 9: multi-dataset benchmark and failure analysis", "multi_dataset_benchmark.md"),
+        ("Phase 10: when does query rewriting harm retrieval?", "rewrite_analysis.md"),
     ]
     for title, filename in sections:
         with st.expander(title, expanded=filename == "hnsw_benchmark.md"):
@@ -149,8 +200,11 @@ def render_results_tab() -> None:
                 st.info(f"{filename} not found. Run the matching benchmark first.")
 
 
-search_tab, results_tab = st.tabs(["Search lab", "Experiment results"])
+search_tab, ask_tab, results_tab = st.tabs(["Search lab", "Ask (RAG)", "Experiment results"])
+settings = sidebar_controls()
 with search_tab:
-    render_search_tab(sidebar_controls())
+    render_search_tab(settings)
+with ask_tab:
+    render_answer_tab(settings)
 with results_tab:
     render_results_tab()
