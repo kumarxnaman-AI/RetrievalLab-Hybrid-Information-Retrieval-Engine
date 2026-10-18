@@ -43,6 +43,8 @@ class DenseRetriever:
         self.norms = np.zeros(0, dtype=np.float32)
         self.chunk_ids: list[str] = []
         self.doc_ids: list[str] = []
+        # Seconds spent embedding the corpus; None if unknown (an older cache without it).
+        self.embed_seconds: float | None = None
 
     @property
     def model(self):
@@ -73,6 +75,8 @@ class DenseRetriever:
             cached = np.load(cache_path, allow_pickle=False)
             if list(cached["chunk_ids"]) == self.chunk_ids:
                 self.vectors = cached["vectors"]
+                if "embed_seconds" in cached.files:
+                    self.embed_seconds = float(cached["embed_seconds"])
                 logger.info("loaded %d cached embeddings", len(self.chunk_ids))
                 self.norms = np.linalg.norm(self.vectors, axis=1)
                 return time.perf_counter() - start
@@ -80,12 +84,14 @@ class DenseRetriever:
         logger.info("embedding %d chunks", len(chunks))
         self.vectors = self.encode([c.text for c in chunks], show_progress=True)
         self.norms = np.linalg.norm(self.vectors, axis=1)
+        self.embed_seconds = time.perf_counter() - start
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             np.savez(
                 cache_path,
                 vectors=self.vectors,
                 chunk_ids=np.array(self.chunk_ids),
+                embed_seconds=np.array(self.embed_seconds),
             )
         return time.perf_counter() - start
 
