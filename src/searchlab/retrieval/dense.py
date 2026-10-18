@@ -34,8 +34,10 @@ def top_k_indices(scores: np.ndarray, k: int) -> np.ndarray:
 class DenseRetriever:
     """Exact (brute-force) semantic search over chunk embeddings."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, encoder=None) -> None:
+        # `encoder` (list[str] -> ndarray) can replace the real model, e.g. in tests.
         self.model_name = model_name
+        self._encoder = encoder
         self._model = None
         self.vectors = np.zeros((0, 0), dtype=np.float32)
         self.norms = np.zeros(0, dtype=np.float32)
@@ -51,7 +53,9 @@ class DenseRetriever:
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
-    def _encode(self, texts: list[str], show_progress: bool = False) -> np.ndarray:
+    def encode(self, texts: list[str], show_progress: bool = False) -> np.ndarray:
+        if self._encoder is not None:
+            return np.asarray(self._encoder(texts), dtype=np.float32)
         return self.model.encode(
             texts,
             batch_size=64,
@@ -74,7 +78,7 @@ class DenseRetriever:
                 return time.perf_counter() - start
 
         logger.info("embedding %d chunks", len(chunks))
-        self.vectors = self._encode([c.text for c in chunks], show_progress=True)
+        self.vectors = self.encode([c.text for c in chunks], show_progress=True)
         self.norms = np.linalg.norm(self.vectors, axis=1)
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +90,10 @@ class DenseRetriever:
         return time.perf_counter() - start
 
     def search(self, query: str, top_k: int = 10) -> list[SearchResult]:
-        query_vec = self._encode([query])[0]
+        return self.search_vector(self.encode([query])[0], top_k)
+
+    def search_vector(self, query_vec: np.ndarray, top_k: int = 10) -> list[SearchResult]:
+        """Exact top-K for an already-embedded query (no model call)."""
         sims = cosine_similarity(query_vec, self.vectors, self.norms)
         return [
             SearchResult(self.chunk_ids[i], self.doc_ids[i], float(sims[i]))
