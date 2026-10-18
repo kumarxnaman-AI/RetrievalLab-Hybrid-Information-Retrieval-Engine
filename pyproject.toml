@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "searchlab"
 version = "0.1.0"
-description = "Retrieval engine built from scratch: inverted index, BM25, dense search"
+description = "Hybrid retrieval lab: from-scratch BM25, HNSW, fusion, reranking, API and dashboard"
 requires-python = ">=3.10"
-dependencies = ["numpy", "sentence-transformers"]
+dependencies = ["numpy", "sentence-transformers", "matplotlib", "fastapi", "uvicorn", "streamlit", "requests"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "httpx"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
