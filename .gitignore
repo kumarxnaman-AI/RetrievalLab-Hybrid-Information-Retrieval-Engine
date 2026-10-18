@@ -6,3 +6,7 @@ __pycache__/
 
 # Downloaded benchmark dataset (BEIR SciFact); re-download instead of committing
 datasets/
+
+# Local secrets and LLM response cache
+.env
+.cache/
