@@ -45,6 +45,17 @@ def ndcg_at_k(ranked: list[str], relevance: dict[str, int], k: int) -> float:
     return dcg(gains) / ideal_dcg if ideal_dcg > 0 else 0.0
 
 
+def quality_summary(run: dict[str, list[str]], qrels: dict[str, dict[str, int]]) -> dict[str, float]:
+    """The headline numbers used in the experiment tables."""
+    at5, at10 = evaluate_run(run, qrels, 5), evaluate_run(run, qrels, 10)
+    return {
+        "Recall@5": at5["Recall@5"],
+        "Recall@10": at10["Recall@10"],
+        "MRR@10": at10["MRR@10"],
+        "nDCG@10": at10["nDCG@10"],
+    }
+
+
 def evaluate_run(
     run: dict[str, list[str]], qrels: dict[str, dict[str, int]], k: int = 10
 ) -> dict[str, float]:
