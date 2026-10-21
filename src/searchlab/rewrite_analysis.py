@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from searchlab.hybrid_benchmark import table
+from searchlab.report import save_and_print
 from searchlab.tokenizer import STOPWORDS
 
 EPSILON = 0.01
@@ -194,9 +195,7 @@ Small groups: treat differences of a few queries as anecdotal rather than eviden
 
 {example_block('helped')}
 """
-    print("\n" + report)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(report, encoding="utf-8")
+    save_and_print(report, args.out)
 
 
 if __name__ == "__main__":

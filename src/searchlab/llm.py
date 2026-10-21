@@ -112,8 +112,13 @@ class LLMClient:
                 continue
 
             if response.status_code == 200:
-                text = response.json()["choices"][0]["message"]["content"].strip()
+                text = (response.json()["choices"][0]["message"].get("content") or "").strip()
                 self.calls_made += 1
+                if not text:
+                    # Reasoning models can spend the whole token budget thinking and return nothing.
+                    # Don't cache that, or every rerun would replay the empty answer.
+                    logger.warning("LLM returned an empty reply (model %s); not caching it", self.model)
+                    return text
                 if cache_path is not None:
                     cache_path.write_text(json.dumps({"text": text}), encoding="utf-8")
                 return text

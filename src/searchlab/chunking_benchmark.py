@@ -6,6 +6,7 @@ the same queries. Exact (not HNSW) dense search keeps approximation error out of
 
 import argparse
 import logging
+import random
 import time
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from searchlab.evaluation.metrics import quality_summary
 from searchlab.hybrid_benchmark import table
 from searchlab.index.inverted_index import InvertedIndex
 from searchlab.logging_setup import setup_logging
+from searchlab.query_benchmark import sample_queries
+from searchlab.report import save_and_print
 from searchlab.retrieval.aggregate import aggregate_to_documents
 from searchlab.retrieval.bm25 import BM25Retriever
 from searchlab.retrieval.dense import DenseRetriever
@@ -29,6 +32,17 @@ TOP = 10
 CANDIDATES = 100
 OVERFETCH = 3
 SYSTEMS = ("BM25", "Dense", "Hybrid")
+
+
+def subset_corpus(docs, qrels, max_docs: int, seed: int = 0):
+    """A small corpus for demo-scale runs: every relevant document for the queries, plus
+    randomly chosen distractors up to `max_docs` (never fewer than the relevant ones)."""
+    relevant = {d for rel in qrels.values() for d, grade in rel.items() if grade > 0}
+    keep = [d for d in docs if d.doc_id in relevant]
+    others = sorted((d for d in docs if d.doc_id not in relevant), key=lambda d: d.doc_id)
+    random.Random(seed).shuffle(others)
+    keep.extend(others[: max(0, max_docs - len(keep))])
+    return keep
 
 
 def evaluate_strategy(strategy, docs, queries, qrels, qvecs, dense_for_encoding, size, cache_dir):
@@ -72,10 +86,18 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=500)
     parser.add_argument("--strategies", nargs="+", default=list(STRATEGIES), choices=STRATEGIES)
     parser.add_argument("--out", default="results/chunking_benchmark.md")
+    parser.add_argument("--max-queries", type=int, default=60, help="0 = use every test query")
+    parser.add_argument("--max-docs", type=int, default=1500, help="corpus size cap, 0 = full corpus")
     args = parser.parse_args()
 
     setup_logging("INFO")
     docs, queries, qrels = load_beir_dataset(Path(args.dataset), "test")
+    full_docs = len(docs)
+    if args.max_queries:
+        queries = sample_queries(queries, args.max_queries)
+        qrels = {q: qrels[q] for q in queries}
+    if args.max_docs:
+        docs = subset_corpus(docs, qrels, args.max_docs)
     cache_dir = Path(".cache")
 
     encoder = DenseRetriever(Config().embedding_model)
@@ -119,7 +141,10 @@ def main() -> None:
 
     report = f"""# Chunking experiment
 
-Dataset: {args.dataset} - {len(docs)} documents, {len(queries)} test queries. Target chunk size {args.size} characters.
+Dataset: {args.dataset} - **demo scale**: {len(docs)} of {full_docs} documents (every relevant document for the
+{len(queries)} sampled test queries, plus random distractors) and {len(queries)} test queries. A smaller corpus is easier
+to search, so absolute scores are higher than on the full corpus; compare strategies with each other, not with other tables.
+Target chunk size {args.size} characters.
 Quality is document-level (chunk results collapse to the best chunk per document). Hybrid = BM25 + exact dense,
 RRF k=60, {CANDIDATES} candidates each. Dense model: {Config().embedding_model}.
 
@@ -143,10 +168,7 @@ SciFact abstracts are single paragraphs, so `recursive` reduces to sentence-boun
 
 {detail_table}
 """
-    print("\n" + report)
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report, encoding="utf-8")
+    save_and_print(report, args.out)
 
 
 if __name__ == "__main__":

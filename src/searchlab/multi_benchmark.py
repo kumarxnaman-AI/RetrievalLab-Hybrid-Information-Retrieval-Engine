@@ -17,6 +17,7 @@ from searchlab.evaluation.metrics import ndcg_at_k, quality_summary
 from searchlab.hybrid_benchmark import table
 from searchlab.logging_setup import setup_logging
 from searchlab.pipeline import build_hnsw, build_systems
+from searchlab.report import save_and_print
 from searchlab.retrieval.aggregate import aggregate_to_documents
 from searchlab.retrieval.fusion import fuse_results
 from searchlab.retrieval.hybrid import HybridParams, HybridRetriever
@@ -267,9 +268,7 @@ def main() -> None:
         "RRF k=60) on every dataset. Quality is document-level at the top 10.\n\n"
         f"## Summary\n\n{summary}\n\n" + "\n".join(dataset_section(r) for r in results)
     )
-    print("\n" + report)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(report, encoding="utf-8")
+    save_and_print(report, args.out)
 
 
 if __name__ == "__main__":

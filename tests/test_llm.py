@@ -50,6 +50,14 @@ def test_responses_are_cached_on_disk(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+def test_empty_replies_are_not_cached(monkeypatch, tmp_path):
+    replies = iter(["", "real answer"])
+    monkeypatch.setattr(requests, "post", lambda *a, **k: FakeResponse(content=next(replies)))
+    client = make_client(tmp_path)
+    assert client.complete("s", "u") == ""
+    assert client.complete("s", "u") == "real answer"  # the empty reply was not replayed from cache
+
+
 def test_different_prompts_are_cached_separately(monkeypatch, tmp_path):
     monkeypatch.setattr(requests, "post", lambda *a, **k: FakeResponse(content="y"))
     client = make_client(tmp_path)

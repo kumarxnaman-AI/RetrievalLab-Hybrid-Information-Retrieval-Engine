@@ -18,6 +18,7 @@ from searchlab.llm import LLMClient
 from searchlab.logging_setup import setup_logging
 from searchlab.pipeline import build_systems
 from searchlab.query_transform import STRATEGY_NAMES, transform
+from searchlab.report import save_and_print
 from searchlab.retrieval.aggregate import aggregate_to_documents
 from searchlab.retrieval.fusion import fuse_results
 
@@ -75,6 +76,11 @@ def main() -> None:
     parser.add_argument("--max-queries", type=int, default=100)
     parser.add_argument("--out", default="results/query_transform_benchmark.md")
     parser.add_argument("--details", default="results/query_transform_details.json")
+    parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="only fetch and cache the LLM transformations (light on CPU), then exit",
+    )
     args = parser.parse_args()
 
     setup_logging("INFO")
@@ -82,6 +88,16 @@ def main() -> None:
     docs, queries, qrels = load_beir_dataset(Path(args.dataset), "test")
     queries = sample_queries(queries, args.max_queries)
     qrels = {q: qrels[q] for q in queries}
+
+    if args.llm_only:
+        for strategy in STRATEGY_NAMES:
+            for i, text in enumerate(queries.values(), start=1):
+                transform(llm, text, strategy)
+                if i % 20 == 0:
+                    logger.info("%s: %d / %d queries done", strategy, i, len(queries))
+        logger.info("LLM calls made: %d (cache hits: %d)", llm.calls_made, llm.cache_hits)
+        return
+
     systems = build_systems(docs, Config())
 
     results = {}  # strategy -> system -> qid -> metrics
@@ -135,9 +151,7 @@ Retrieval: 500-char chunks, BM25 + exact dense (MiniLM) + RRF hybrid (k=60). Qua
 
 With {len(queries)} queries, differences of about a point are within noise; look at the helped/harmed counts as well as the mean.
 """
-    print("\n" + report)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(report, encoding="utf-8")
+    save_and_print(report, args.out)
     Path(args.details).write_text(
         json.dumps(
             {
